@@ -11,17 +11,21 @@ import (
   "strconv"
   "sort"
   "os"
+  "strings"
 )
 
+var shops = []Shop{}
+
 type Shop struct {
-  Name string
+  Name string `json:"name"`
+  Distance float64 `json:"dist"`
   Y float64
   X float64
 }
 
-type ShopDistance struct {
-  Name string
-  Distance float64
+type OutputShop struct {
+  Name string `json:"name"`
+  Distance float64 `json:"dist"`
 }
 
 func main() {
@@ -29,6 +33,10 @@ func main() {
   http.HandleFunc("/addcoffees", addCoffees)
 
   http.ListenAndServe(":4000", nil)
+}
+
+func init() {
+  readShops()
 }
 
 func distance(x1, y1, x2, y2 float64) float64 {
@@ -48,9 +56,7 @@ func toFixed(num float64, precision int) float64 {
     return float64(round(num * output)) / output
 }
 
-func readShops() []Shop {
-  var shops = []Shop{}
-
+func readShops() {
   csvFile, _ := os.Open("data.csv")
   reader := csv.NewReader(bufio.NewReader(csvFile))
   for {
@@ -60,41 +66,39 @@ func readShops() []Shop {
     } else if error != nil {
         fmt.Println(error)
     }
-    y, _ := strconv.ParseFloat(line[1], 64)
-    x, _ := strconv.ParseFloat(line[2], 64)
+    y, _ := strconv.ParseFloat(strings.TrimSpace(line[1]), 64)
+    x, _ := strconv.ParseFloat(strings.TrimSpace(line[2]), 64)
     shops = append(shops, Shop{
       Name: line[0],
       Y: y,
       X: x,
     })
   }
-
-  return shops
 }
 
 func needCoffee(w http.ResponseWriter, r *http.Request) {
-
-  shops := readShops()
-
   xString := r.URL.Query()["x"][0]
   yString := r.URL.Query()["y"][0]
 
   x, _ := strconv.ParseFloat(xString, 64)
   y, _ := strconv.ParseFloat(yString, 64)
 
-  //array of distances
-  shopDistances := []ShopDistance{}
-  for i := 0; i < len(shops); i++ {
-    shopDistance := ShopDistance{shops[i].Name, distance(x, y, shops[i].X, shops[i].Y)}
-    shopDistances = append(shopDistances, shopDistance)
-  }  
+  for i, shop := range shops {
+    shops[i].Distance = distance(x, y, shop.X, shop.Y)
+  }
 
   //sort them
-  sort.Slice(shopDistances, func(i, j int) bool {
-    return shopDistances[i].Distance < shopDistances[j].Distance
+  sort.Slice(shops, func(i, j int) bool {
+    return shops[i].Distance < shops[j].Distance
   })
 
-  js, err := json.Marshal(shopDistances[:3])
+
+  var outputShops []OutputShop
+  for _, shop := range shops {
+    outputShops = append(outputShops, OutputShop{ Name: shop.Name, Distance: shop.Distance })
+  }
+
+  js, err := json.Marshal(outputShops)
 
   if err != nil {
     fmt.Fprintf(w, "Oh no!", err)
@@ -106,31 +110,20 @@ func needCoffee(w http.ResponseWriter, r *http.Request) {
 
 func addCoffees(w http.ResponseWriter, r *http.Request) {
 
-  if r.Method == "POST" {
-    decoder := json.NewDecoder(r.Body)
-
-    var newShops []Shop
-    err := decoder.Decode(&newShops)
-
-    file, ferr := os.OpenFile("data.csv", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-    if ferr != nil {
-      fmt.Println(ferr)
-    }
-    defer file.Close()
-
-    writer := csv.NewWriter(file)
-    defer writer.Flush()
-
-    for i := 0; i < len(newShops); i++ {
-      newLine := []string{newShops[i].Name, fmt.Sprintf("%f", newShops[i].Y), fmt.Sprintf("%f", newShops[i].X)}
-      writer.Write(newLine)
-    }
-
-    if err != nil {
-      fmt.Println(err)
-    }
-  } else {
+  if r.Method != "POST" {
     http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
+    return
   }
 
+  decoder := json.NewDecoder(r.Body)
+
+  var newShops []Shop
+  err := decoder.Decode(&newShops)
+  if err != nil {
+    fmt.Println(err)
+  }
+
+  shops = append(shops, newShops...)
+
+  fmt.Println(shops)
 }
